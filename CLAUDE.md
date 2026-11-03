@@ -184,6 +184,7 @@ multi-protocol dispatch.
   error, or a gap it refuses, such as one inside a request line), the bytes it
   had buffered and the rest of the connection; at close, bytes it still holds.
   A stopped parser is never asked to finalize (no `htp_connp_close`).
+  `conversations(max_bytes=)` counts kept HTTP bodies too.
 - **Expose libhtp, don't hide it.** Python sees libhtp's own model and names
   (`htp.Config`, `htp.Tx`, its field names, raw `bytes` values). This library
   adds only the glue (one connection parser per HTTP flow, feeding both

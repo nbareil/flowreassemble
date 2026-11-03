@@ -161,3 +161,11 @@ def test_short_tunnel_payload_is_delivered_at_close():
     events = list(reassemble(frames, http=htp.Config()))
     assert [e.data for e in events if isinstance(e, Data)] == [b"\x16\x03\x01"]
     assert isinstance(events[-1], Closed)
+
+
+def test_max_bytes_also_caps_kept_http_bodies():
+    big = b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n" + b"x" * 100
+    (conv,) = conversations(http_conn((GET, big)), http=htp.Config(keep_bodies=1000), max_bytes=10)
+    (tx,) = conv.transactions
+    assert tx.response_body == b"x" * 10
+    assert [a.kind for a in conv.anomalies] == ["truncated"]

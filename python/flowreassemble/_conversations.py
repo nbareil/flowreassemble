@@ -103,6 +103,24 @@ class _Builder:
         else:
             self.turns.append((direction, ts, bytearray(data)))
 
+    def transaction(self, tx: htp.Tx) -> None:
+        """Kept HTTP bodies count against ``max_bytes`` too."""
+        for name, direction in (
+            ("request_body", Direction.TO_SERVER),
+            ("response_body", Direction.TO_CLIENT),
+        ):
+            body = getattr(tx, name)
+            if body is None:
+                continue
+            if self.max_bytes is not None and self.stored + len(body) > self.max_bytes:
+                body = body[: self.max_bytes - self.stored]
+                setattr(tx, name, body)
+                if not self.truncated:
+                    self.truncated = True
+                    self.anomalies.append(Anomaly("truncated", direction, tx.ts))
+            self.stored += len(body)
+        self.transactions.append(tx)
+
     def gap(self, direction: Direction, length: int) -> None:
         self.gaps.append((direction, self.offsets[direction], length))
         self.offsets[direction] += length
@@ -135,7 +153,7 @@ def conversations(
     """Yields one ``Conversation`` per connection, once it closes.
 
     ``max_bytes`` caps the bytes kept per conversation (both directions
-    together); ``None`` means no cap. Other options are those of
+    together, kept HTTP bodies included); ``None`` means no cap. Other options are those of
     ``reassemble()``. For UDP, each datagram is its own turn. With ``http``,
     ``transactions`` holds the libhtp transactions; ``turns`` then only holds
     bytes libhtp did not parse.
@@ -151,7 +169,7 @@ def conversations(
         elif isinstance(ev, Closed):
             yield building.pop(ev.flow.id).build(ev)
         elif isinstance(ev, htp.Tx):
-            building[ev.flow.id].transactions.append(ev)
+            building[ev.flow.id].transaction(ev)
         else:
             _, flow, ts, direction = ev
             building[flow.id].anomalies.append(Anomaly("overlap", direction, ts))
