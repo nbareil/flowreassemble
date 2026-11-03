@@ -134,9 +134,9 @@ prefix. Open and filter the handle, then pass it to `reassemble()` or
 `conversations()`:
 
 ```python
-h = pcap.open_offline("c2.pcap")   # pcap or pcapng
+h = pcap.open_offline("c2.pcap")  # pcap or pcapng
 h.setfilter("tcp and host 203.0.113.7")
-h.datalink()                       # the link-layer type (DLT_*)
+h.datalink()  # the link-layer type (DLT_*)
 ```
 
 ### Live capture
