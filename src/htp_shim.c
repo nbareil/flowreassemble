@@ -122,16 +122,24 @@ htp_tx_t *fr_connp_tx(const htp_connp_t *connp, size_t i) {
 }
 
 /*
- * After htp_connp_req_data() returns HTP_STREAM_TUNNEL from CONNECT
- * probing, the probed bytes are counted as consumed but belong to the
- * tunnel: they are in in_buf, or still in the current chunk between the
- * consume and read offsets (see htp_connp_req_consolidate_data).
+ * Bytes libhtp read but did not parse, for when it stops (tunnel, error,
+ * refused gap) or the connection closes. They are in in_buf/out_buf, and
+ * during a call also in the current chunk between the consume and read
+ * offsets (see htp_connp_req_consolidate_data). The current chunk is only
+ * valid right after the htp_connp_*_data() call that received it.
  */
-size_t fr_connp_req_tunnel_prefix(const htp_connp_t *connp, const unsigned char **data) {
-    if (connp->in_buf != NULL) {
-        *data = connp->in_buf;
-        return connp->in_buf_size;
-    }
-    *data = connp->in_current_data + connp->in_current_consume_offset;
-    return connp->in_current_read_offset - connp->in_current_consume_offset;
+size_t fr_connp_buffered(const htp_connp_t *connp, int response, const unsigned char **data) {
+    *data = response ? connp->out_buf : connp->in_buf;
+    if (*data == NULL) return 0;
+    return response ? connp->out_buf_size : connp->in_buf_size;
+}
+
+size_t fr_connp_current_unparsed(const htp_connp_t *connp, int response, const unsigned char **data) {
+    const unsigned char *cur = response ? connp->out_current_data : connp->in_current_data;
+    int64_t consume = response ? connp->out_current_consume_offset : connp->in_current_consume_offset;
+    int64_t read = response ? connp->out_current_read_offset : connp->in_current_read_offset;
+    *data = NULL;
+    if (cur == NULL || read <= consume) return 0;
+    *data = cur + consume;
+    return (size_t) (read - consume);
 }

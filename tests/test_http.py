@@ -138,3 +138,14 @@ def test_random_and_mutated_traffic_does_not_crash():
             frames += c.close()
         events = list(reassemble(frames, http=htp.Config(keep_bodies=64)))
         assert isinstance(events[-1], Closed)
+
+
+def test_gap_inside_request_line_stops_http_parsing():
+    c = Conn(sport=80)
+    frames = c.handshake() + [c.send(b"GET /my/c")]
+    c.send(b"2/dispatcher/ ")  # never captured
+    frames.append(c.send(b"HTTP/1.1\r\nHost: x\r\n\r\n"))
+    events = list(reassemble(frames + c.close(), http=htp.Config()))
+    assert all(e.request_uri is None for e in events if isinstance(e, htp.Tx))
+    data = [e.data for e in events if isinstance(e, Data)]
+    assert data == [b"GET /my/c", b"HTTP/1.1\r\nHost: x\r\n\r\n"]

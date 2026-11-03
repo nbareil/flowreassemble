@@ -55,8 +55,8 @@ the public Python API (`python/flowreassemble/`).
   must match the shim's `switch` order). libhtp's suspended parsing
   (`HTP_STREAM_DATA_OTHER`) is handled with per-direction queues; on
   `TUNNEL`/`ERROR`/`STOP` the rest of the connection becomes plain `Data`
-  (CONNECT probing hides already-read bytes, recovered by
-  `fr_connp_req_tunnel_prefix`). Copy anything from libhtp's current data
+  (libhtp's read-but-unparsed bytes are recovered by `fr_connp_buffered` and
+  `fr_connp_current_unparsed`). Copy anything from libhtp's current data
   before the chunk it points into is dropped.
 - `vendor/libhtp/`: libhtp 0.5.53, built by `build.rs` with the `cc` crate
   (no autotools). `vendor/libhtp/README.md` lists every local change; keep it
@@ -177,9 +177,11 @@ multi-protocol dispatch.
   request decompression off, cookie parsing on). `htp.Tx` fields carry
   libhtp's names; only `flow` and `ts` are ours, plus the opt-in
   `request_body`/`response_body` (`keep_bodies`). Every TCP connection is
-  parsed as HTTP in HTTP mode; `Gap` events still pass through; after a
-  tunnel (CONNECT, 101) or a parse error, the rest of the connection comes as
-  `Data`.
+  parsed as HTTP in HTTP mode; `Gap` events still pass through. Bytes libhtp
+  does not parse come as `Data`: after it stops (CONNECT or 101 tunnel, parse
+  error, or a gap it refuses, such as one inside a request line), the bytes it
+  had buffered and the rest of the connection.
+  A stopped parser is never asked to finalize (no `htp_connp_close`).
 - **Expose libhtp, don't hide it.** Python sees libhtp's own model and names
   (`htp.Config`, `htp.Tx`, its field names, raw `bytes` values). This library
   adds only the glue (one connection parser per HTTP flow, feeding both

@@ -6,8 +6,9 @@
 //! completes the transaction (or when the connection closes, for transactions
 //! left incomplete). `Gap` events still pass through.
 //!
-//! If libhtp stops parsing a connection (a CONNECT tunnel, or an error), the
-//! rest of that connection is delivered as plain `Data` events.
+//! If libhtp stops parsing a connection (a CONNECT tunnel, an error, or a gap
+//! it can't skip), the rest of that connection is delivered as plain `Data`
+//! events, starting with the bytes libhtp had read but not parsed.
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{CString, c_char, c_int, c_void};
@@ -48,10 +49,8 @@ type TxHook = extern "C" fn(*mut HtpTx) -> c_int;
 type DataHook = extern "C" fn(*mut HtpTxData) -> c_int;
 
 const HTP_OK: c_int = 1;
-const HTP_STREAM_ERROR: c_int = 3;
-const HTP_STREAM_TUNNEL: c_int = 4;
 const HTP_STREAM_DATA_OTHER: c_int = 5;
-const HTP_STREAM_STOP: c_int = 6;
+const HTP_STREAM_DATA: c_int = 9;
 
 unsafe extern "C" {
     fn htp_config_create() -> *mut HtpCfg;
@@ -117,7 +116,12 @@ unsafe extern "C" {
     fn fr_tx_flow(tx: *const HtpTx) -> *mut c_void;
     fn fr_connp_tx_count(connp: *const HtpConnp) -> usize;
     fn fr_connp_tx(connp: *const HtpConnp, i: usize) -> *mut HtpTx;
-    fn fr_connp_req_tunnel_prefix(connp: *const HtpConnp, data: *mut *const u8) -> usize;
+    fn fr_connp_buffered(connp: *const HtpConnp, response: c_int, data: *mut *const u8) -> usize;
+    fn fr_connp_current_unparsed(
+        connp: *const HtpConnp,
+        response: c_int,
+        data: *mut *const u8,
+    ) -> usize;
 }
 
 /// `htp_tx_t` byte-string fields, in the order of `fr_tx_bstr`.
@@ -411,10 +415,13 @@ impl HttpFlow {
                             (rc, htp_connp_res_data_consumed(self.connp))
                         }
                     };
+                    // Anything but DATA / DATA_OTHER means libhtp stopped
+                    // (tunnel, error, stop, or CLOSED after refusing a gap).
+                    let stopped = rc != HTP_STREAM_DATA && rc != HTP_STREAM_DATA_OTHER;
                     // Must be read while `chunk` (libhtp's current data) is alive.
                     let mut unparsed = Vec::new();
-                    if rc == HTP_STREAM_TUNNEL && dir == 0 {
-                        unparsed = unsafe { self.tunnel_prefix() };
+                    if stopped {
+                        unparsed = unsafe { self.unparsed(dir, true) };
                     }
                     progressed = true;
                     self.blocked[1 - dir] = false;
@@ -422,21 +429,22 @@ impl HttpFlow {
                         Chunk::Data(d) if consumed < d.len() => Some(d[consumed..].to_vec()),
                         _ => None,
                     };
-                    match rc {
-                        HTP_STREAM_DATA_OTHER => {
-                            if let Some(rest) = rest {
-                                self.queue[dir].push_front(Chunk::Data(rest));
-                            }
-                            self.blocked[dir] = true;
+                    if stopped {
+                        self.raw = true;
+                        unparsed.extend(rest.unwrap_or_default());
+                        if !unparsed.is_empty() {
+                            raw_out.push((dir as u8, unparsed));
                         }
-                        HTP_STREAM_ERROR | HTP_STREAM_TUNNEL | HTP_STREAM_STOP => {
-                            self.raw = true;
-                            unparsed.extend(rest.unwrap_or_default());
-                            if !unparsed.is_empty() {
-                                raw_out.push((dir as u8, unparsed));
-                            }
+                        // The other direction may hold bytes libhtp never parsed.
+                        let other = unsafe { self.unparsed(1 - dir, false) };
+                        if !other.is_empty() {
+                            raw_out.push((1 - dir as u8, other));
                         }
-                        _ => {}
+                    } else if rc == HTP_STREAM_DATA_OTHER {
+                        if let Some(rest) = rest {
+                            self.queue[dir].push_front(Chunk::Data(rest));
+                        }
+                        self.blocked[dir] = true;
                     }
                 }
             }
@@ -452,14 +460,24 @@ impl HttpFlow {
         }
     }
 
-    /// Tunnel bytes libhtp read while probing a CONNECT tunnel.
-    unsafe fn tunnel_prefix(&self) -> Vec<u8> {
+    /// Bytes libhtp read in direction `dir` but did not parse. With
+    /// `current`, also the unparsed part of the chunk just fed, which is only
+    /// valid right after the call that received it.
+    unsafe fn unparsed(&self, dir: usize, current: bool) -> Vec<u8> {
+        let response = dir as c_int;
+        let mut out = Vec::new();
         let mut ptr = std::ptr::null();
-        let len = unsafe { fr_connp_req_tunnel_prefix(self.connp, &mut ptr) };
-        if ptr.is_null() || len == 0 {
-            return Vec::new();
+        let len = unsafe { fr_connp_buffered(self.connp, response, &mut ptr) };
+        if !ptr.is_null() && len > 0 {
+            out.extend_from_slice(unsafe { std::slice::from_raw_parts(ptr, len) });
         }
-        unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
+        if current {
+            let len = unsafe { fr_connp_current_unparsed(self.connp, response, &mut ptr) };
+            if !ptr.is_null() && len > 0 {
+                out.extend_from_slice(unsafe { std::slice::from_raw_parts(ptr, len) });
+            }
+        }
+        out
     }
 
     fn take_done(&mut self) -> Vec<TxCopy> {
@@ -470,7 +488,10 @@ impl HttpFlow {
     fn close(mut self, ts: f64) -> Vec<TxCopy> {
         let tv = timeval(ts);
         let keep = unsafe { (*self.shared).keep_bodies.is_some() };
-        unsafe { htp_connp_close(self.connp, &tv) };
+        if !self.raw {
+            // Once libhtp has stopped, don't let it finalize what it holds.
+            unsafe { htp_connp_close(self.connp, &tv) };
+        }
         let mut txs = self.take_done();
         unsafe {
             for i in 0..fr_connp_tx_count(self.connp) {
