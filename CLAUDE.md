@@ -38,6 +38,8 @@ the public Python API (`python/flowreassemble/`).
   port), gaps (skipped when the receiver ACKs past buffered data, when more
   than 16 MiB is buffered, or at close), overlaps, port reuse, idle timeout,
   and closing everything at end of input.
+  Encapsulation depth (`MAX_DEPTH` in `decode.rs`) also counts nested IP
+  fragment reassemblies; keep every recursive decode path bounded by it.
 - `src/pcap_handle.rs`: the `pcap` submodule. One `Handle` (`pcap_t`) moves
   through libpcap's states (inactive → active, or offline). A handle feeds one
   reassembly at a time (`owner`); `breakloop()` works without the capture lock.

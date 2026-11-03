@@ -171,6 +171,9 @@ impl Decoder {
         mut d: &[u8],
         depth: u8,
     ) -> Option<Packet> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
         loop {
             match next {
                 0 | 43 | 60 => {
@@ -201,7 +204,9 @@ impl Decoder {
                         continue;
                     }
                     let (proto, whole) = self.reassemble(ts, key, inner, offset, more, payload)?;
-                    return self.ipv6_chain(ts, src, dst, proto, &whole, depth);
+                    // A reassembled datagram can hold another fragment:
+                    // count it as a layer so nesting stays bounded.
+                    return self.ipv6_chain(ts, src, dst, proto, &whole, depth + 1);
                 }
                 _ => return self.l4(ts, src, dst, next, d, depth),
             }

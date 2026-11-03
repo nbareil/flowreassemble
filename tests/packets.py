@@ -162,3 +162,20 @@ def write_pcap(path: Path, frames: list[tuple[float, int, bytes]], *, nano: bool
             frac = round((ts - sec) * scale)
             f.write(struct.pack("<IIII", sec, frac, len(frame), len(frame)) + frame)
     return path
+
+
+def ipv6_fragment(ident: int, offset: int, more: bool, next_header: int, payload: bytes) -> bytes:
+    return struct.pack("!BBHI", next_header, 0, (offset // 8) << 3 | int(more), ident) + payload
+
+
+def nested_ipv6_fragments(levels: int, inner: bytes) -> list[tuple[float, int, bytes]]:
+    """Fragment sets nested ``levels`` deep: each reassembled datagram is a
+    fragment of the next set. ``inner`` is the TCP segment at the bottom."""
+    src, dst = "2001:db8::1", "2001:db8::2"
+    payload, nxt, frames = inner, 6, []
+    for i in range(levels):
+        tail = ipv6_fragment(1000 + i, 8, False, nxt, payload[8:])
+        frames.append((1.0 + i * 1e-4, ETHERNET, ether(ipv6(src, dst, 44, tail))))
+        payload, nxt = ipv6_fragment(1000 + i, 0, True, nxt, payload[:8]), 44
+    frames.append((2.0, ETHERNET, ether(ipv6(src, dst, nxt, payload))))
+    return frames

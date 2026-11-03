@@ -1,7 +1,7 @@
 import ipaddress
 
 from flowreassemble import Closed, CloseReason, Data, Direction, Gap, Opened, reassemble
-from packets import ACK, ETHERNET, SYN, Conn, ether, ipv4, tcp
+from packets import ACK, ETHERNET, SYN, Conn, ether, ipv4, nested_ipv6_fragments, tcp
 
 
 def stream(events, direction):
@@ -157,3 +157,11 @@ def test_vlan_ipv6_and_ip_fragments_are_decoded():
     frag2 = ipv4("10.0.0.1", "203.0.113.7", 6, body[16:], ident=7, frag_off=16)
     frames = [syn, (1.1, ETHERNET, ether(frag2, vlan=42)), (1.2, ETHERNET, ether(frag1, vlan=42))]
     assert stream(list(reassemble(frames)), Direction.TO_SERVER) == b"fragmented payload!"
+
+
+def test_ip_fragment_nesting_is_limited():
+    syn = tcp(51000, 8443, 1, 0, SYN, b"")
+    assert any(isinstance(e, Opened) for e in reassemble(nested_ipv6_fragments(1, syn)))
+    assert not any(isinstance(e, Opened) for e in reassemble(nested_ipv6_fragments(20, syn)))
+    # Deep nesting used to recurse without bound and overflow the stack.
+    assert not any(isinstance(e, Opened) for e in reassemble(nested_ipv6_fragments(30_000, syn)))
