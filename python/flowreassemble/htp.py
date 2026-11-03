@@ -92,10 +92,15 @@ class Config:
     kept).
     """
 
+    #: ``htp_config_set_server_personality``
     server_personality: ServerPersonality = ServerPersonality.MINIMAL
+    #: ``htp_config_set_request_decompression``
     request_decompression: bool = False
+    #: ``htp_config_set_response_decompression``
     response_decompression: bool = True
+    #: ``htp_config_set_parse_request_cookies``
     parse_request_cookies: bool = True
+    #: Bytes kept of each request and response body; ``None`` keeps none.
     keep_bodies: int | None = None
 
     def _native(self) -> dict[str, Any]:

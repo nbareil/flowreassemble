@@ -20,14 +20,22 @@ ServerHint = str | IPAddress | tuple[str | IPAddress, int] | None
 class Direction(enum.Enum):
     """Where the data goes."""
 
+    #: Sent by the client.
     TO_SERVER = "to_server"
+    #: Sent by the server.
     TO_CLIENT = "to_client"
 
 
 class CloseReason(enum.Enum):
+    """Why a flow ended."""
+
+    #: Both sides sent a FIN.
     FIN = "FIN"
+    #: A TCP reset.
     RST = "RST"
+    #: No packet for ``idle_timeout`` seconds.
     TIMEOUT = "TIMEOUT"
+    #: The input ended, or ``breakloop()`` stopped a capture.
     EOF = "EOF"
 
 
@@ -41,11 +49,17 @@ class Flow:
     ``state`` is yours: store per-connection decoder state there.
     """
 
+    #: Unique within one ``reassemble()`` or ``conversations()`` call.
     id: int
+    #: ``"tcp"`` or ``"udp"``.
     transport: str
+    #: ``(address, port)`` of the client.
     client: Endpoint
+    #: ``(address, port)`` of the server.
     server: Endpoint
+    #: Timestamp of the first packet, in seconds since the epoch.
     start: float
+    #: Free for your decoder; ``None`` until you set it.
     state: Any = field(default=None, repr=False)
 
     def __repr__(self) -> str:
@@ -59,7 +73,10 @@ def _fmt(ep: Endpoint) -> str:
 
 @dataclass(frozen=True, eq=False)
 class Opened:
+    """A new flow."""
+
     flow: Flow
+    #: Timestamp of the packet that opened the flow.
     ts: float
 
 
@@ -69,7 +86,9 @@ class Data:
 
     flow: Flow
     direction: Direction
+    #: Only bytes not delivered before.
     data: bytes
+    #: Timestamp of the packet that released these bytes.
     ts: float
 
     def __repr__(self) -> str:
@@ -84,12 +103,15 @@ class Gap:
 
     flow: Flow
     direction: Direction
+    #: Number of missing bytes.
     length: int
     ts: float
 
 
 @dataclass(frozen=True, eq=False)
 class Closed:
+    """The flow ended. No event for it follows."""
+
     flow: Flow
     reason: CloseReason
     ts: float

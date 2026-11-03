@@ -19,14 +19,15 @@ with `nix develop -c`).
 - `make test`: Rust unit tests, then rebuild and run pytest.
 - `make lint` / `make format`: rustfmt, clippy (`-D warnings`), ruff.
 - `make build`: release wheel (abi3, one wheel for Python 3.10+).
+- `make docs`: Sphinx HTML into `docs/_build/html`, warnings are errors.
 - Single Python test: `uv run --no-sync pytest tests/test_tcp.py::test_rst_closes_the_flow`
   (run `maturin develop --uv` first if Rust code changed).
 - Single Rust test: `cargo test segments::tests::covers_detects_holes`.
 
 ## CI and releases
 
-GitHub Actions (`.github/workflows/`). `ci.yml` runs `make lint` and `make
-test` in the Nix dev shell on Linux and macOS. `release.yml` builds the wheels
+GitHub Actions (`.github/workflows/`). `ci.yml` runs `make lint`, `make
+test` and `make docs` in the Nix dev shell on Linux and macOS. `release.yml` builds the wheels
 (manylinux_2_28 x86_64 and aarch64, macOS universal2) and the sdist, then
 installs each wheel on a bare system (a `python:*-slim` container on Linux)
 and runs pytest against it. On a `v*` tag it also creates the GitHub release
@@ -42,6 +43,15 @@ Linux wheels link a private, static libpcap built by
 capture backend, so no RDMA, D-Bus or libnl dependencies). macOS wheels link
 the system libpcap (`PKG_CONFIG=/usr/bin/false` keeps a Homebrew one out), and
 the job checks with `otool` that only system libraries are linked.
+
+## Documentation
+
+`docs/` is a Sphinx project (MyST Markdown, Furo theme), hosted on Read the
+Docs (`.readthedocs.yaml`), which builds the package from source so that
+autodoc sees the real extension. The guide pages describe behavior; the API
+reference (`docs/api.md`) comes from docstrings and `#:` field comments, so
+document public classes and fields in the code. Keep the guide, the README and
+the docstrings consistent with each other and with the code.
 
 ## Architecture
 

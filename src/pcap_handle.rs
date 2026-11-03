@@ -221,8 +221,8 @@ impl Handle {
     }
 
     /// pcap_breakloop: makes a running `reassemble()` or `conversations()`
-    /// on this handle close its open flows and end, within `IDLE_WAIT_MS` on
-    /// a quiet live capture. Safe from a signal handler or another thread.
+    /// on this handle close its open flows and end, within 100 ms on a quiet
+    /// live capture. Safe from a signal handler or another thread.
     fn breakloop(&self) {
         self.stop.store(true, Ordering::SeqCst);
     }

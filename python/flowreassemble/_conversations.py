@@ -26,6 +26,7 @@ class Turn:
     """Consecutive bytes sent in one direction before the other side spoke."""
 
     direction: Direction
+    #: Timestamp of the turn's first bytes.
     ts: float
     data: bytes
 
@@ -43,6 +44,7 @@ class Anomaly:
     bytes were dropped).
     """
 
+    #: ``"overlap"`` or ``"truncated"``.
     kind: str
     direction: Direction
     ts: float
@@ -50,18 +52,30 @@ class Anomaly:
 
 @dataclass(eq=False)
 class Conversation:
+    """One connection (TCP) or exchange between two endpoints (UDP), complete."""
+
+    #: The flow, as ``reassemble()`` would have reported it.
     flow: Flow
+    #: ``"tcp"`` or ``"udp"``.
     transport: str
+    #: ``(address, port)`` of the client.
     client: Endpoint
+    #: ``(address, port)`` of the server.
     server: Endpoint
+    #: Timestamp of the first packet.
     start: float
+    #: Timestamp of the close.
     end: float
     close_reason: CloseReason
+    #: Bytes in the order they were exchanged, one entry per change of
+    #: direction (TCP) or per datagram (UDP).
     turns: list[Turn] = field(default_factory=list, repr=False)
     gaps: list[tuple[Direction, int, int]] = field(default_factory=list, repr=False)
     """``(direction, offset, length)``: ``offset`` counts every byte of that
     direction's stream, including missing ones."""
     anomalies: list[Anomaly] = field(default_factory=list, repr=False)
+    """Overlapping retransmissions with different bytes, and truncation by
+    ``max_bytes``."""
     transactions: list[htp.Tx] = field(default_factory=list, repr=False)
     """HTTP mode only: libhtp transactions, in order."""
 

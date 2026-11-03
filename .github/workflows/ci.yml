@@ -22,3 +22,5 @@ jobs:
         run: nix develop -c make lint
       - name: Test
         run: nix develop -c make test
+      - name: Docs
+        run: nix develop -c make docs

@@ -25,6 +25,8 @@ connection's state lives on the flow.
 
 Status: early development. The API can still change.
 
+Documentation: <https://flowreassemble.readthedocs.io/>
+
 ## Install
 
 ```sh
