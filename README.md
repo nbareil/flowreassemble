@@ -1,5 +1,7 @@
 # flowreassemble
 
+[![Documentation](https://app.readthedocs.org/projects/flowreassemble/badge/?version=latest)](https://flowreassemble.readthedocs.io/en/latest/)
+
 flowreassemble turns packet captures into application byte streams, so you
 can write a decoder for a custom protocol (such as C2 traffic) in a few lines
 of Python. It defragments IP, reassembles TCP and UDP flows, and parses HTTP
