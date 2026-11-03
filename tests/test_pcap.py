@@ -92,3 +92,15 @@ def test_breakloop_only_stops_the_running_reassembly(tmp_path):
             h.breakloop()
     rest = [e.data for e in reassemble(h) if isinstance(e, Data)]
     assert rest == [b"second"]
+
+
+def test_native_reassembler_keeps_reading_the_handle_it_claimed(tmp_path):
+    from flowreassemble import _native
+
+    path = write_pcap(tmp_path / "c.pcap", two_connections())
+    a, b = pcap.open_offline(path), pcap.open_offline(path)
+    r1, r2 = _native.Reassembler(None, 3600.0), _native.Reassembler(None, 3600.0)
+    r1.run(a)
+    r2.run(b)
+    with pytest.raises(pcap.Error):
+        r1.run(b)

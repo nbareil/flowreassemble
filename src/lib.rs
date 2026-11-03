@@ -237,7 +237,13 @@ impl Reassembler {
             return Ok(None);
         }
         let h = handle.get();
-        if self.handle.is_none() {
+        if let Some(own) = &self.handle {
+            if !own.bind(py).is(handle) {
+                return Err(pcap_handle::Error::new_err(
+                    "this reassembly reads another handle",
+                ));
+            }
+        } else {
             h.owner
                 .compare_exchange(0, self.id, Ordering::SeqCst, Ordering::SeqCst)
                 .map_err(|_| {
