@@ -35,8 +35,9 @@ the public Python API (`python/flowreassemble/`).
   shared by defragmentation and TCP.
 - `src/flows.rs`: flow table and TCP/UDP reassembly; emits `Event`s. It holds
   the rules: picking the client (handshake, then `server=` hint, then lower
-  port), gaps (skipped when the receiver ACKs past buffered data, when more
-  than 16 MiB is buffered, or at close), overlaps, port reuse, idle timeout,
+  port), port reuse (a SYN whose sequence number differs from the
+  connection's ISN), gaps (skipped when the receiver ACKs past buffered data, when more
+  than 16 MiB is buffered, or at close), overlaps, idle timeout,
   and closing everything at end of input.
   Encapsulation depth (`MAX_DEPTH` in `decode.rs`) also counts nested IP
   fragment reassemblies; keep every recursive decode path bounded by it.

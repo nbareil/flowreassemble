@@ -105,6 +105,8 @@ struct At {
 
 #[derive(Default)]
 struct Half {
+    /// Sequence number of the SYN, when seen.
+    isn: Option<u32>,
     next_seq: Option<u32>,
     next_off: u64,
     pending: Segments,
@@ -272,10 +274,15 @@ struct Flow {
 }
 
 impl Flow {
-    fn carried_data(&self) -> bool {
-        self.halves
+    /// A SYN from `p` starts a new connection on this 4-tuple (port reuse),
+    /// rather than repeating this connection's SYN.
+    fn reused_by(&self, p: &Packet, seq: u32) -> bool {
+        let carried_data = self
+            .halves
             .iter()
-            .any(|h| h.next_off > 0 || h.fin_off.is_some() || !h.pending.is_empty())
+            .any(|h| h.next_off > 0 || h.fin_off.is_some() || !h.pending.is_empty());
+        let isn = self.halves[self.dir(p) as usize].isn;
+        carried_data && isn != Some(seq)
     }
 
     fn dir(&self, p: &Packet) -> u8 {
@@ -362,7 +369,16 @@ impl Reassembler {
         };
 
         let pure_syn = flags & (TCP_SYN | TCP_ACK) == TCP_SYN;
-        if pure_syn && self.flows.get(&key).is_some_and(Flow::carried_data) {
+        let syn_seq = match &p.transport {
+            Transport::Tcp { seq, .. } => *seq,
+            Transport::Udp { .. } => 0,
+        };
+        if pure_syn
+            && self
+                .flows
+                .get(&key)
+                .is_some_and(|f| f.reused_by(&p, syn_seq))
+        {
             // Port reuse: a new connection on the same 4-tuple.
             let mut old = self.flows.remove(&key).expect("flow exists");
             old.close(ts, CloseReason::Timeout, out);
@@ -419,6 +435,7 @@ impl Reassembler {
                 let half = &mut flow.halves[dir as usize];
                 if flags & TCP_SYN != 0 {
                     if half.next_seq.is_none() {
+                        half.isn = Some(seq);
                         half.next_seq = Some(seq.wrapping_add(1));
                     }
                     if payload.is_empty() && flags & TCP_FIN == 0 {

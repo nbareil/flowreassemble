@@ -159,6 +159,15 @@ def test_vlan_ipv6_and_ip_fragments_are_decoded():
     assert stream(list(reassemble(frames)), Direction.TO_SERVER) == b"fragmented payload!"
 
 
+def test_duplicate_syn_after_data_does_not_split_the_connection():
+    c = Conn()
+    hs = c.handshake()
+    frames = hs + [c.send(b"one"), hs[0], c.send(b"two")] + c.close()
+    events = list(reassemble(frames))
+    assert sum(isinstance(e, Opened) for e in events) == 1
+    assert stream(events, Direction.TO_SERVER) == b"onetwo"
+
+
 def test_ip_fragment_nesting_is_limited():
     syn = tcp(51000, 8443, 1, 0, SYN, b"")
     assert any(isinstance(e, Opened) for e in reassemble(nested_ipv6_fragments(1, syn)))
