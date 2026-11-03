@@ -57,8 +57,9 @@ jobs:
         run: |
           unzip -q -o dist/*.whl -d unpacked
           otool -L unpacked/flowreassemble/_native.abi3.so | tee libs.txt
-          # Library lines are indented; both architectures are listed.
-          if grep -E '^\s' libs.txt | grep -v -E '^\s+/(usr/lib|System/Library)/'; then
+          # Library lines are indented; both architectures are listed, each
+          # starting with the extension's own install name.
+          if grep -E '^\s' libs.txt | grep -v -E '^\s+(/usr/lib/|/System/Library/|@rpath/flowreassemble\._native\.abi3\.so )'; then
             echo "the extension links a library that is not part of macOS"
             exit 1
           fi
