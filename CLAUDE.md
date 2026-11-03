@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Status
 
 Early development. TCP/UDP reassembly, `reassemble()`, `conversations()`, the
-`pcap` submodule, and HTTP through libhtp (`htp` submodule, `http=` option)
-work. Not done yet: bundling libpcap into Linux wheels, CI (including fuzzing
-the HTTP path), and tests of live capture (they need capture privileges).
+`pcap` submodule, HTTP through libhtp (`htp` submodule, `http=` option), CI and
+release wheels work. Not done yet: fuzzing the HTTP path, and tests of live
+capture (they need capture privileges).
 
 ## Commands
 
@@ -22,6 +22,26 @@ with `nix develop -c`).
 - Single Python test: `uv run --no-sync pytest tests/test_tcp.py::test_rst_closes_the_flow`
   (run `maturin develop --uv` first if Rust code changed).
 - Single Rust test: `cargo test segments::tests::covers_detects_holes`.
+
+## CI and releases
+
+GitHub Actions (`.github/workflows/`). `ci.yml` runs `make lint` and `make
+test` in the Nix dev shell on Linux and macOS. `release.yml` builds the wheels
+(manylinux_2_28 x86_64 and aarch64, macOS universal2) and the sdist, then
+installs each wheel on a bare system (a `python:*-slim` container on Linux)
+and runs pytest against it. On a `v*` tag it also creates the GitHub release
+with those files and uploads them to PyPI (trusted publishing, environment
+`pypi`).
+
+To release: set the same version in `pyproject.toml` and `Cargo.toml`, commit,
+then tag `vX.Y.Z` and push the tag. The release job fails if the tag and the
+version differ.
+
+Linux wheels link a private, static libpcap built by
+`.github/build-libpcap.sh` (pinned version and checksum, only the plain Linux
+capture backend, so no RDMA, D-Bus or libnl dependencies). macOS wheels link
+the system libpcap (`PKG_CONFIG=/usr/bin/false` keeps a Homebrew one out), and
+the job checks with `otool` that only system libraries are linked.
 
 ## Architecture
 
@@ -134,8 +154,8 @@ multi-protocol dispatch.
   are used internally by the glue and are not exposed for registration.
 - **Directions** are named by where the data goes: `to_server` and
   `to_client`.
-- **Packet source: libpcap, exposed, not hidden.** It's bundled into the
-  wheels. As with `htp`, a `flowreassemble.pcap` submodule mirrors libpcap's
+- **Packet source: libpcap, exposed, not hidden.** Linux wheels link their
+  own static libpcap; macOS wheels use the system one. As with `htp`, a `flowreassemble.pcap` submodule mirrors libpcap's
   own model and names, without the `pcap_` prefix: `pcap.open_offline(path)`,
   both live-capture APIs (`pcap.open_live(device, snaplen, promisc,
   timeout_ms)`, and `pcap.create(device)` → `set_*` (snaplen, promisc,
@@ -164,7 +184,8 @@ multi-protocol dispatch.
   reads packets from the handle directly. That keeps per-packet work out of
   Python, releases the Python lock while blocking, and allows Ctrl-C. It's
   only safe when the handle and the core share one libpcap copy, meaning one
-  compiled extension; each wheel bundles its own private libpcap. The
+  compiled extension (Linux wheels link a private static libpcap into it;
+  on macOS, every user of libpcap in the process shares the system one). The
   top-level `pcap` import name is also taken on PyPI.
 - **Platforms:** Linux and macOS first. Windows is best effort: libpcap there
   means Npcap, which users install themselves and which we can't bundle.
