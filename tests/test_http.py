@@ -149,3 +149,15 @@ def test_gap_inside_request_line_stops_http_parsing():
     assert all(e.request_uri is None for e in events if isinstance(e, htp.Tx))
     data = [e.data for e in events if isinstance(e, Data)]
     assert data == [b"GET /my/c", b"HTTP/1.1\r\nHost: x\r\n\r\n"]
+
+
+def test_short_tunnel_payload_is_delivered_at_close():
+    c = Conn(sport=8080)
+    frames = c.handshake() + [
+        c.send(b"CONNECT a:443 HTTP/1.1\r\n\r\n"),
+        c.reply(b"HTTP/1.1 200 OK\r\n\r\n"),
+        c.send(b"\x16\x03\x01"),
+    ]
+    events = list(reassemble(frames, http=htp.Config()))
+    assert [e.data for e in events if isinstance(e, Data)] == [b"\x16\x03\x01"]
+    assert isinstance(events[-1], Closed)

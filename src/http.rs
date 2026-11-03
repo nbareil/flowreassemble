@@ -8,7 +8,8 @@
 //!
 //! If libhtp stops parsing a connection (a CONNECT tunnel, an error, or a gap
 //! it can't skip), the rest of that connection is delivered as plain `Data`
-//! events, starting with the bytes libhtp had read but not parsed.
+//! events, starting with the bytes libhtp had read but not parsed. Bytes
+//! still unparsed when the connection closes are delivered as `Data` too.
 
 use std::collections::{HashMap, VecDeque};
 use std::ffi::{CString, c_char, c_int, c_void};
@@ -484,10 +485,22 @@ impl HttpFlow {
         std::mem::take(unsafe { &mut (*self.shared).done })
     }
 
-    /// Closes the connection parser; returns every transaction left.
-    fn close(mut self, ts: f64) -> Vec<TxCopy> {
+    /// Closes the connection parser. Returns the bytes libhtp was still
+    /// holding unparsed (such as a short tunnel payload being probed), then
+    /// every transaction left.
+    fn close(mut self, ts: f64) -> (Vec<(u8, Vec<u8>)>, Vec<TxCopy>) {
         let tv = timeval(ts);
         let keep = unsafe { (*self.shared).keep_bodies.is_some() };
+        let mut unparsed = Vec::new();
+        if !self.raw {
+            for dir in 0..2 {
+                // Only the buffers: the last chunk fed is gone by now.
+                let bytes = unsafe { self.unparsed(dir, false) };
+                if !bytes.is_empty() {
+                    unparsed.push((dir as u8, bytes));
+                }
+            }
+        }
         if !self.raw {
             // Once libhtp has stopped, don't let it finalize what it holds.
             unsafe { htp_connp_close(self.connp, &tv) };
@@ -501,7 +514,7 @@ impl HttpFlow {
                 }
             }
         }
-        txs
+        (unparsed, txs)
     }
 }
 
@@ -595,7 +608,16 @@ impl Http {
                 }
                 Event::Closed { flow, ts, .. } => {
                     if let Some(hf) = self.flows.remove(&flow) {
-                        for tx in hf.close(ts) {
+                        let (unparsed, txs) = hf.close(ts);
+                        for (dir, data) in unparsed {
+                            out.push(Event::Data {
+                                flow,
+                                ts,
+                                dir,
+                                data,
+                            });
+                        }
+                        for tx in txs {
                             out.push(Event::Tx {
                                 flow,
                                 ts,

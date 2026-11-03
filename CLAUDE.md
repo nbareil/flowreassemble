@@ -182,7 +182,7 @@ multi-protocol dispatch.
   parsed as HTTP in HTTP mode; `Gap` events still pass through. Bytes libhtp
   does not parse come as `Data`: after it stops (CONNECT or 101 tunnel, parse
   error, or a gap it refuses, such as one inside a request line), the bytes it
-  had buffered and the rest of the connection.
+  had buffered and the rest of the connection; at close, bytes it still holds.
   A stopped parser is never asked to finalize (no `htp_connp_close`).
 - **Expose libhtp, don't hide it.** Python sees libhtp's own model and names
   (`htp.Config`, `htp.Tx`, its field names, raw `bytes` values). This library
