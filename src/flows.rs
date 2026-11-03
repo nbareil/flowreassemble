@@ -432,6 +432,17 @@ impl Reassembler {
                 flags,
                 payload,
             } => {
+                // The ACK covers data sent before this packet: apply it first,
+                // so data it releases comes out before this packet's payload.
+                if flags & TCP_ACK != 0 {
+                    let other = 1 - dir;
+                    let at = At {
+                        flow: id,
+                        ts,
+                        dir: other,
+                    };
+                    flow.halves[other as usize].acked(ack, at, out);
+                }
                 let half = &mut flow.halves[dir as usize];
                 if flags & TCP_SYN != 0 {
                     if half.next_seq.is_none() {
@@ -449,15 +460,6 @@ impl Reassembler {
                 };
                 let at = At { flow: id, ts, dir };
                 half.segment(seq, flags & TCP_FIN != 0, &payload, at, out);
-                if flags & TCP_ACK != 0 {
-                    let other = 1 - dir;
-                    let at = At {
-                        flow: id,
-                        ts,
-                        dir: other,
-                    };
-                    flow.halves[other as usize].acked(ack, at, out);
-                }
                 let done =
                     flags & TCP_RST != 0 || (flow.halves[0].fin_done && flow.halves[1].fin_done);
                 if done {

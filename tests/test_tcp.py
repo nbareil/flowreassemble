@@ -168,6 +168,16 @@ def test_duplicate_syn_after_data_does_not_split_the_connection():
     assert stream(events, Direction.TO_SERVER) == b"onetwo"
 
 
+def test_data_released_by_an_ack_comes_before_the_acking_packet_data():
+    c = Conn()
+    frames = c.handshake()
+    c.send(b"LOST")
+    frames.append(c.send(b"REQ"))
+    frames.append(c.reply(b"RESP"))  # its ACK covers the hole
+    order = [(e.direction, e.data) for e in reassemble(frames) if isinstance(e, Data)]
+    assert order == [(Direction.TO_SERVER, b"REQ"), (Direction.TO_CLIENT, b"RESP")]
+
+
 def test_ip_fragment_nesting_is_limited():
     syn = tcp(51000, 8443, 1, 0, SYN, b"")
     assert any(isinstance(e, Opened) for e in reassemble(nested_ipv6_fragments(1, syn)))

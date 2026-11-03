@@ -35,7 +35,8 @@ the public Python API (`python/flowreassemble/`).
   shared by defragmentation and TCP.
 - `src/flows.rs`: flow table and TCP/UDP reassembly; emits `Event`s. It holds
   the rules: picking the client (handshake, then `server=` hint, then lower
-  port), port reuse (a SYN whose sequence number differs from the
+  port), a packet's ACK applied before its payload (so released data keeps
+  its order), port reuse (a SYN whose sequence number differs from the
   connection's ISN), gaps (skipped when the receiver ACKs past buffered data, when more
   than 16 MiB is buffered, or at close), overlaps, idle timeout,
   and closing everything at end of input.
