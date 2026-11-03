@@ -268,7 +268,7 @@ impl Reassembler {
                     Some(p) => self.flows.push(ts, p, &mut out),
                     None => self.flows.advance(ts, &mut out),
                 },
-                Next::Timeout => {
+                Next::Idle => {
                     if h.live {
                         self.flows.advance(wall_clock(), &mut out);
                     }

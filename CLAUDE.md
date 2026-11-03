@@ -44,7 +44,10 @@ the public Python API (`python/flowreassemble/`).
   fragment reassemblies; keep every recursive decode path bounded by it.
 - `src/pcap_handle.rs`: the `pcap` submodule. One `Handle` (`pcap_t`) moves
   through libpcap's states (inactive → active, or offline). A handle feeds one
-  reassembly at a time (`owner`); `breakloop()` works without the capture lock.
+  reassembly at a time (`owner`); `breakloop()` only sets a flag, which works
+  without the capture lock. Live handles are made non-blocking when activated
+  and each read waits at most 100 ms, so Ctrl-C and `breakloop()` always get
+  control back: a blocked libpcap read can't be interrupted.
 - `src/lib.rs`: `_native.Reassembler`. `push()` takes one frame, `run(handle)`
   reads packets with the Python lock released and returns batches of event
   tuples, `finish()` closes everything. The tuple format is documented at the

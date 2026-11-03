@@ -3,11 +3,18 @@
 //! A `Handle` is libpcap's `pcap_t`. It is created inactive by `create()`
 //! (configure it with `set_*`, then `activate()`), or ready to use by
 //! `open_live()` and `open_offline()`.
+//!
+//! Live handles are switched to non-blocking mode when activated, and reads
+//! wait for packets in short slices (`IDLE_WAIT_MS`). A blocked libpcap read
+//! can't be interrupted (libpcap retries reads interrupted by signals, and
+//! Python only runs signal handlers between our calls), so this is what lets
+//! Ctrl-C and `breakloop()` stop a quiet live capture, even with
+//! `timeout_ms=0`.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use pcap::{Active, BreakLoop, Capture, Inactive, Offline, Precision};
+use pcap::{Active, Capture, Inactive, Offline, Precision};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -27,16 +34,54 @@ pub enum State {
 
 pub enum Next {
     Packet(f64, Vec<u8>),
-    Timeout,
+    /// No packet within `IDLE_WAIT_MS` (live captures only).
+    Idle,
     End,
     Failed(String),
 }
 
+/// Longest a live read waits before giving control back.
+const IDLE_WAIT_MS: i32 = 100;
+
+/// Waits until `fd` is readable, at most `IDLE_WAIT_MS`.
+#[cfg(unix)]
+fn wait_readable(fd: std::os::fd::RawFd) {
+    let mut pfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    unsafe { libc::poll(&mut pfd, 1, IDLE_WAIT_MS) };
+}
+
+#[cfg(not(unix))]
+fn wait_readable(_fd: i32) {
+    std::thread::sleep(std::time::Duration::from_millis(IDLE_WAIT_MS as u64));
+}
+
+/// Live handles are read in non-blocking mode (see the module docs).
+fn nonblocking(c: Capture<Active>) -> PyResult<Capture<Active>> {
+    c.setnonblock().map_err(err)
+}
+
 impl State {
-    /// Reads one packet. Called with the Python lock released.
+    /// Reads one packet, waiting at most `IDLE_WAIT_MS` on live captures.
+    /// Called with the Python lock released.
     pub fn next(&mut self, nano: bool) -> Next {
         let res = match self {
-            State::Active(c) => c.next_packet(),
+            State::Active(c) => {
+                #[cfg(unix)]
+                let fd = std::os::fd::AsRawFd::as_raw_fd(c);
+                #[cfg(not(unix))]
+                let fd = 0;
+                match c.next_packet() {
+                    Err(pcap::Error::TimeoutExpired) => {
+                        wait_readable(fd);
+                        return Next::Idle;
+                    }
+                    other => other,
+                }
+            }
             State::Offline(c) => c.next_packet(),
             _ => return Next::Failed("handle is not activated".into()),
         };
@@ -46,7 +91,7 @@ impl State {
                 let ts = p.header.ts.tv_sec as f64 + p.header.ts.tv_usec as f64 * frac;
                 Next::Packet(ts, p.data.to_vec())
             }
-            Err(pcap::Error::TimeoutExpired) => Next::Timeout,
+            Err(pcap::Error::TimeoutExpired) => Next::Idle,
             Err(pcap::Error::NoMorePackets) => Next::End,
             Err(e) => Next::Failed(e.to_string()),
         }
@@ -63,31 +108,17 @@ pub struct Handle {
     /// The reassembly reading this handle (0: none). A handle feeds one
     /// reassembly at a time, otherwise packets would be split between them.
     pub owner: AtomicU64,
-    breaker: Mutex<Option<BreakLoop>>,
 }
 
 impl Handle {
     fn new(state: State, live: bool, nano: bool) -> Self {
-        let h = Handle {
+        Handle {
             state: Mutex::new(state),
             stop: AtomicBool::new(false),
             live,
             nano: AtomicBool::new(nano),
             owner: AtomicU64::new(0),
-            breaker: Mutex::new(None),
-        };
-        h.arm_breaker();
-        h
-    }
-
-    fn arm_breaker(&self) {
-        let mut st = self.state.lock().expect("pcap state lock");
-        let b = match &mut *st {
-            State::Active(c) => Some(c.breakloop_handle()),
-            State::Offline(c) => Some(c.breakloop_handle()),
-            _ => None,
-        };
-        *self.breaker.lock().expect("breaker lock") = b;
+        }
     }
 
     fn with_state<R>(&self, f: impl FnOnce(&mut State) -> PyResult<R>) -> PyResult<R> {
@@ -160,16 +191,14 @@ impl Handle {
     fn activate(&self) -> PyResult<()> {
         self.with_state(|st| match std::mem::replace(st, State::Closed) {
             State::Inactive(c) => {
-                *st = State::Active(c.open().map_err(err)?);
+                *st = State::Active(nonblocking(c.open().map_err(err)?)?);
                 Ok(())
             }
             other => {
                 *st = other;
                 Err(Error::new_err("handle is already activated"))
             }
-        })?;
-        self.arm_breaker();
-        Ok(())
+        })
     }
 
     /// pcap_setfilter (compiled with pcap_compile)
@@ -192,18 +221,14 @@ impl Handle {
     }
 
     /// pcap_breakloop: makes a running `reassemble()` or `conversations()`
-    /// on this handle close its open flows and end. Safe from a signal
-    /// handler.
+    /// on this handle close its open flows and end, within `IDLE_WAIT_MS` on
+    /// a quiet live capture. Safe from a signal handler or another thread.
     fn breakloop(&self) {
         self.stop.store(true, Ordering::SeqCst);
-        if let Some(b) = &*self.breaker.lock().expect("breaker lock") {
-            b.breakloop();
-        }
     }
 
     /// pcap_close
     fn close(&self) -> PyResult<()> {
-        *self.breaker.lock().expect("breaker lock") = None;
         self.with_state(|st| {
             *st = State::Closed;
             Ok(())
@@ -246,7 +271,7 @@ pub fn open_live(device: &str, snaplen: i32, promisc: bool, timeout_ms: i32) -> 
         .timeout(timeout_ms)
         .open()
         .map_err(err)?;
-    Ok(Handle::new(State::Active(c), true, false))
+    Ok(Handle::new(State::Active(nonblocking(c)?), true, false))
 }
 
 /// pcap_findalldevs: names of the devices that can be opened.
