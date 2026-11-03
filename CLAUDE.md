@@ -39,7 +39,11 @@ the public Python API (`python/flowreassemble/`).
   its order), port reuse (a SYN whose sequence number differs from the
   connection's ISN), gaps (skipped when the receiver ACKs past buffered data, when more
   than 16 MiB is buffered, or at close), overlaps, idle timeout,
-  and closing everything at end of input.
+  and closing everything at end of input. A FIN marks the end of its
+  direction's stream: an ACK reaching it proves the bytes before it, and
+  nothing past it is delivered. After a FIN/RST close, the connection's
+  sequence numbers are kept for 120 s (`Linger`), to drop its late packets
+  while still seeing a new connection on the same 4-tuple.
   Encapsulation depth (`MAX_DEPTH` in `decode.rs`) also counts nested IP
   fragment reassemblies; keep every recursive decode path bounded by it.
 - `src/pcap_handle.rs`: the `pcap` submodule. One `Handle` (`pcap_t`) moves

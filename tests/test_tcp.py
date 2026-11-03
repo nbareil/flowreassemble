@@ -250,3 +250,22 @@ def test_buffered_bytes_after_a_late_fin_are_dropped():
     events = list(reassemble(frames))
     assert stream(events, Direction.TO_SERVER) == b"data"
     assert not any(isinstance(e, Gap) for e in events)
+
+
+def test_new_connection_on_a_closed_tuple_is_seen_without_its_syn():
+    old = Conn(cseq=100, sseq=200)
+    frames = old.handshake() + [old.send(b"old")] + old.close()
+    new = Conn(cseq=900_000, sseq=777_000)
+    new.ts = old.ts + 1
+    frames += new.handshake()[1:] + [new.send(b"new")]  # its SYN was not captured
+    flows = [e.flow for e in reassemble(frames) if isinstance(e, Opened)]
+    assert len(flows) == 2
+    assert stream(list(reassemble(frames)), Direction.TO_SERVER) == b"oldnew"
+
+
+def test_late_retransmission_after_close_is_ignored():
+    c = Conn()
+    frames = c.handshake()
+    last = c.send(b"last")
+    frames += [last] + c.close() + [last]
+    assert sum(isinstance(e, Opened) for e in reassemble(frames)) == 1

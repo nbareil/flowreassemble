@@ -18,6 +18,10 @@ const TAIL_KEEP: usize = 64 * 1024;
 const MAX_BUFFERED: usize = 16 * 1024 * 1024;
 const MAX_ACK_JUMP: u64 = 1 << 30;
 const CLOSED_LINGER: f64 = 120.0;
+/// How far from a closed connection's last sequence number a late segment
+/// is still taken as part of it. A new connection's random initial sequence
+/// number falls this close only rarely.
+const LINGER_WINDOW: u32 = 1 << 24;
 const SWEEP_EVERY: f64 = 1.0;
 
 pub const TO_SERVER: u8 = 0;
@@ -281,6 +285,44 @@ impl Half {
     }
 }
 
+/// What is kept of a TCP connection closed by FIN or RST, to tell its late
+/// packets (dropped) from a new connection on the same 4-tuple.
+struct Linger {
+    ts: f64,
+    client: (IpAddr, u16),
+    /// Per direction (`TO_SERVER`, `TO_CLIENT`): the SYN's sequence number,
+    /// and the sequence number following the last byte.
+    isn: [Option<u32>; 2],
+    end: [Option<u32>; 2],
+}
+
+impl Linger {
+    fn new(flow: &Flow, ts: f64) -> Self {
+        Linger {
+            ts,
+            client: flow.client,
+            isn: [flow.halves[0].isn, flow.halves[1].isn],
+            end: [flow.halves[0].next_seq, flow.halves[1].next_seq],
+        }
+    }
+
+    /// True if the packet is a late part of the closed connection.
+    fn owns(&self, p: &Packet, flags: u8, seq: u32) -> bool {
+        let dir = if (p.src, p.sport) == self.client {
+            TO_SERVER
+        } else {
+            TO_CLIENT
+        } as usize;
+        if flags & TCP_SYN != 0 {
+            return self.isn[dir] == Some(seq);
+        }
+        match self.end[dir] {
+            Some(end) => (seq.wrapping_sub(end) as i32).unsigned_abs() < LINGER_WINDOW,
+            None => true,
+        }
+    }
+}
+
 struct Flow {
     id: u64,
     proto: Proto,
@@ -332,7 +374,7 @@ pub struct Reassembler {
     server: Option<ServerHint>,
     idle_timeout: Option<f64>,
     flows: HashMap<Key, Flow>,
-    closed: HashMap<Key, f64>,
+    closed: HashMap<Key, Linger>,
     next_id: u64,
     now: f64,
     last_sweep: f64,
@@ -385,7 +427,7 @@ impl Reassembler {
         };
 
         let pure_syn = flags & (TCP_SYN | TCP_ACK) == TCP_SYN;
-        let syn_seq = match &p.transport {
+        let tcp_seq = match &p.transport {
             Transport::Tcp { seq, .. } => *seq,
             Transport::Udp { .. } => 0,
         };
@@ -393,14 +435,18 @@ impl Reassembler {
             && self
                 .flows
                 .get(&key)
-                .is_some_and(|f| f.reused_by(&p, syn_seq))
+                .is_some_and(|f| f.reused_by(&p, tcp_seq))
         {
             // Port reuse: a new connection on the same 4-tuple.
             let mut old = self.flows.remove(&key).expect("flow exists");
             old.close(ts, CloseReason::Timeout, out);
         }
         if !self.flows.contains_key(&key) {
-            if !starts || (self.closed.contains_key(&key) && !pure_syn) {
+            let late = self
+                .closed
+                .get(&key)
+                .is_some_and(|l| l.owns(&p, flags, tcp_seq));
+            if !starts || late {
                 return;
             }
             self.closed.remove(&key);
@@ -486,7 +532,7 @@ impl Reassembler {
                     };
                     let mut flow = self.flows.remove(&key).expect("flow exists");
                     flow.close(ts, reason, out);
-                    self.closed.insert(key, ts);
+                    self.closed.insert(key, Linger::new(&flow, ts));
                 }
             }
         }
@@ -502,7 +548,7 @@ impl Reassembler {
         }
         self.last_sweep = self.now;
         let now = self.now;
-        self.closed.retain(|_, t| now - *t < CLOSED_LINGER);
+        self.closed.retain(|_, l| now - l.ts < CLOSED_LINGER);
         let Some(timeout) = self.idle_timeout else {
             return;
         };
