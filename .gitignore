@@ -7,3 +7,4 @@ __pycache__/
 *.pcap
 *.pcapng
 !tests/data/*.pcap
+/CLAUDE.local.md
