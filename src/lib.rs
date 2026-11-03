@@ -216,14 +216,24 @@ impl Reassembler {
         self.emit(py, out)
     }
 
-    /// End of input: closes every open flow.
+    /// End of input: closes every open flow and releases the handle.
     fn finish(&mut self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
+        self.release();
         let mut out = Vec::new();
         if !self.finished {
             self.finished = true;
             self.flows.finish(&mut out);
         }
         self.emit(py, out)
+    }
+
+    /// Releases the pcap handle so another reassembly can read it. Called
+    /// when iteration stops early (break, exception); open flows are not
+    /// yielded then.
+    #[pyo3(name = "release")]
+    fn py_release(&mut self) {
+        self.finished = true;
+        self.release();
     }
 
     /// Reads packets from a pcap handle until some events are ready.

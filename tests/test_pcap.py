@@ -104,3 +104,25 @@ def test_native_reassembler_keeps_reading_the_handle_it_claimed(tmp_path):
     r2.run(b)
     with pytest.raises(pcap.Error):
         r1.run(b)
+
+
+def test_interrupted_reassembly_releases_its_handle(tmp_path):
+    h = pcap.open_offline(write_pcap(tmp_path / "c.pcap", two_connections()))
+    events = reassemble(h)
+    next(events)
+    try:
+        events.throw(KeyboardInterrupt)
+    except KeyboardInterrupt as e:
+        kept = e  # the traceback keeps the interrupted frames alive
+    assert kept.__traceback__ is not None
+    assert [e for e in reassemble(h) if isinstance(e, Data)]
+
+
+def test_native_finish_releases_the_handle(tmp_path):
+    from flowreassemble import _native
+
+    h = pcap.open_offline(write_pcap(tmp_path / "c.pcap", two_connections()))
+    r = _native.Reassembler(None, 3600.0)
+    r.run(h)
+    r.finish()
+    assert [e for e in reassemble(h) if isinstance(e, Data)]

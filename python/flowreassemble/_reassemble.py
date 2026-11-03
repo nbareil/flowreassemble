@@ -112,13 +112,18 @@ def _raw_events(
 ) -> Iterator[tuple]:
     settings = None if http is None else http._native()
     core = _native.Reassembler(_server_hint(server), idle_timeout, settings)
-    if isinstance(source, pcap.Handle):
-        while (batch := core.run(source)) is not None:
-            yield from batch
-        return
-    for ts, linktype, frame in source:
-        yield from core.push(ts, linktype, frame)
-    yield from core.finish()
+    try:
+        if isinstance(source, pcap.Handle):
+            while (batch := core.run(source)) is not None:
+                yield from batch
+            return
+        for ts, linktype, frame in source:
+            yield from core.push(ts, linktype, frame)
+        yield from core.finish()
+    finally:
+        # Early exit (break, exception, Ctrl-C): free the handle now rather
+        # than whenever the iterator is garbage collected.
+        core.release()
 
 
 def _events(
