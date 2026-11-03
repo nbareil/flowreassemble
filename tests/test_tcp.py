@@ -1,7 +1,7 @@
 import ipaddress
 
 from flowreassemble import Closed, CloseReason, Data, Direction, Gap, Opened, reassemble
-from packets import ACK, ETHERNET, FIN, SYN, Conn, ether, ipv4, nested_ipv6_fragments, tcp
+from packets import ACK, ETHERNET, FIN, PSH, SYN, Conn, ether, ipv4, nested_ipv6_fragments, tcp
 
 
 def stream(events, direction):
@@ -220,3 +220,33 @@ def test_ack_covering_the_fin_seen_before_the_fin_adds_no_gap():
     events = list(reassemble(frames))
     assert not any(isinstance(e, Gap) for e in events)
     assert events[-1].reason is CloseReason.FIN
+
+
+def test_bytes_after_a_fin_are_dropped():
+    c = Conn()
+    frames = c.handshake()
+    base = c.cseq
+    frames += [
+        c.client_frame(base, ACK | PSH, b"data"),
+        c.client_frame(base + 4, FIN | ACK),
+        c.client_frame(base + 5, ACK | PSH, b"X"),  # beyond the FIN
+        c.server_frame(c.sseq, FIN | ACK, ack=base + 5),
+    ]
+    events = list(reassemble(frames))
+    assert stream(events, Direction.TO_SERVER) == b"data"
+    assert not any(isinstance(e, Gap) for e in events)
+    assert events[-1].reason is CloseReason.FIN
+
+
+def test_buffered_bytes_after_a_late_fin_are_dropped():
+    c = Conn()
+    frames = c.handshake()
+    base = c.cseq
+    frames += [
+        c.client_frame(base + 6, ACK | PSH, b"X"),  # buffered, beyond the FIN below
+        c.client_frame(base, FIN | ACK | PSH, b"data"),
+        c.server_frame(c.sseq, FIN | ACK, ack=base + 5),
+    ]
+    events = list(reassemble(frames))
+    assert stream(events, Direction.TO_SERVER) == b"data"
+    assert not any(isinstance(e, Gap) for e in events)

@@ -206,7 +206,15 @@ impl Half {
             // An ACK seen earlier may cover the FIN's own sequence number,
             // which is not stream data.
             self.max_ack_off = self.max_ack_off.min(fin_off);
+            // Nothing follows a FIN: drop bytes buffered beyond it.
+            self.pending.truncate(fin_off);
         }
+        // ...nor bytes arriving later beyond it.
+        let payload = match self.fin_off {
+            Some(fin) if off >= fin => &payload[..0],
+            Some(fin) => &payload[..payload.len().min((fin - off) as usize)],
+            None => payload,
+        };
         if !payload.is_empty() {
             let end = off + payload.len() as u64;
             let mut conflict = false;

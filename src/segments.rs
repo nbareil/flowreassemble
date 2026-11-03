@@ -63,6 +63,19 @@ impl Segments {
         Some(seg)
     }
 
+    /// Drops every stored byte at or after `from`.
+    pub fn truncate(&mut self, from: u64) {
+        let dropped = self.map.split_off(&from);
+        self.bytes -= dropped.values().map(Vec::len).sum::<usize>();
+        if let Some((start, seg)) = self.map.iter_mut().next_back() {
+            let keep = from.saturating_sub(*start) as usize;
+            if keep < seg.len() {
+                self.bytes -= seg.len() - keep;
+                seg.truncate(keep);
+            }
+        }
+    }
+
     pub fn first_start(&self) -> Option<u64> {
         self.map.keys().next().copied()
     }
@@ -119,6 +132,17 @@ mod tests {
         assert_eq!(out, b"XXabcdYY");
         assert!(s.is_empty());
         assert_eq!(s.bytes(), 0);
+    }
+
+    #[test]
+    fn truncate_drops_bytes_from_an_offset() {
+        let mut s = Segments::default();
+        s.insert(0, b"abcd");
+        s.insert(6, b"gh");
+        s.truncate(2);
+        assert_eq!(s.bytes(), 2);
+        assert_eq!(s.end(), Some(2));
+        assert_eq!(s.into_vec(), b"ab");
     }
 
     #[test]
