@@ -81,3 +81,14 @@ def test_create_returns_an_inactive_handle():
     h.set_immediate_mode(True)
     with pytest.raises(pcap.Error):
         h.datalink()
+
+
+def test_breakloop_only_stops_the_running_reassembly(tmp_path):
+    c = Conn()
+    frames = c.handshake() + [c.send(b"first"), c.send(b"second")] + c.close()
+    h = pcap.open_offline(write_pcap(tmp_path / "c.pcap", frames))
+    for ev in reassemble(h):
+        if isinstance(ev, Data):
+            h.breakloop()
+    rest = [e.data for e in reassemble(h) if isinstance(e, Data)]
+    assert rest == [b"second"]

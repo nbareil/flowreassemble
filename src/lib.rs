@@ -244,6 +244,8 @@ impl Reassembler {
                     pcap_handle::Error::new_err("handle is already read by another reassembly")
                 })?;
             self.handle = Some(handle.clone().unbind());
+            // breakloop() stops the reassembly running at the time, not a later one.
+            h.stop.store(false, Ordering::SeqCst);
         }
         let nano = h.nano.load(Ordering::Relaxed);
         let mut guard = h
@@ -292,6 +294,7 @@ impl Reassembler {
         }
         drop(guard);
         if ended {
+            h.stop.store(false, Ordering::SeqCst);
             self.finished = true;
             self.release();
             self.flows.finish(&mut out);
