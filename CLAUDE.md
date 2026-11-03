@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Status
 
-Early development. TCP/UDP reassembly, `reassemble()`, `conversations()` and
-the `pcap` submodule work. Not done yet: HTTP through libhtp (the `htp`
-submodule and the `http=` option), bundling libpcap into Linux wheels, and CI.
+Early development. TCP/UDP reassembly, `reassemble()`, `conversations()`, the
+`pcap` submodule, and HTTP through libhtp (`htp` submodule, `http=` option)
+work. Not done yet: bundling libpcap into Linux wheels, CI (including fuzzing
+the HTTP path), and tests of live capture (they need capture privileges).
 
 ## Commands
 
@@ -44,6 +45,20 @@ the public Python API (`python/flowreassemble/`).
   reads packets with the Python lock released and returns batches of event
   tuples, `finish()` closes everything. The tuple format is documented at the
   top of the file.
+- `src/http.rs` + `src/htp_shim.c`: HTTP mode. A post-processor over the
+  reassembler's events: TCP `Data`/`Gap` go into one libhtp connection parser
+  per flow, and libhtp hooks copy each completed `htp_tx_t` into a `Tx` event
+  (incomplete ones are copied at close). Rust never touches libhtp structs
+  directly: the C shim exposes fields by number (the name lists in `http.rs`
+  must match the shim's `switch` order). libhtp's suspended parsing
+  (`HTP_STREAM_DATA_OTHER`) is handled with per-direction queues; on
+  `TUNNEL`/`ERROR`/`STOP` the rest of the connection becomes plain `Data`
+  (CONNECT probing hides already-read bytes, recovered by
+  `fr_connp_req_tunnel_prefix`). Copy anything from libhtp's current data
+  before the chunk it points into is dropped.
+- `vendor/libhtp/`: libhtp 0.5.53, built by `build.rs` with the `cc` crate
+  (no autotools). `vendor/libhtp/README.md` lists every local change; keep it
+  up to date.
 - `python/flowreassemble/_reassemble.py`: wraps event tuples into `Opened`,
   `Data`, `Gap` and `Closed` dataclasses and `Flow` objects. Overlap events are
   dropped here, except for `conversations()`.
@@ -155,6 +170,14 @@ multi-protocol dispatch.
   decoder), and fuzz the HTTP path
   in CI. The Rust port (`suricata-htp`) was rejected because almost all of its
   API is `pub(crate)`.
+- **HTTP details (implemented):** `htp.Config()` defaults are those of
+  `htp_config_create()` (personality `MINIMAL`, response decompression on,
+  request decompression off, cookie parsing on). `htp.Tx` fields carry
+  libhtp's names; only `flow` and `ts` are ours, plus the opt-in
+  `request_body`/`response_body` (`keep_bodies`). Every TCP connection is
+  parsed as HTTP in HTTP mode; `Gap` events still pass through; after a
+  tunnel (CONNECT, 101) or a parse error, the rest of the connection comes as
+  `Data`.
 - **Expose libhtp, don't hide it.** Python sees libhtp's own model and names
   (`htp.Config`, `htp.Tx`, its field names, raw `bytes` values). This library
   adds only the glue (one connection parser per HTTP flow, feeding both

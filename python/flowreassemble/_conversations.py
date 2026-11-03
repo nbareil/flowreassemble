@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
+from . import htp
 from ._reassemble import (
     Closed,
     CloseReason,
@@ -61,6 +62,8 @@ class Conversation:
     """``(direction, offset, length)``: ``offset`` counts every byte of that
     direction's stream, including missing ones."""
     anomalies: list[Anomaly] = field(default_factory=list, repr=False)
+    transactions: list[htp.Tx] = field(default_factory=list, repr=False)
+    """HTTP mode only: libhtp transactions, in order."""
 
     @property
     def to_server(self) -> bytes:
@@ -83,6 +86,7 @@ class _Builder:
         self.offsets = {Direction.TO_SERVER: 0, Direction.TO_CLIENT: 0}
         self.gaps: list[tuple[Direction, int, int]] = []
         self.anomalies: list[Anomaly] = []
+        self.transactions: list[htp.Tx] = []
 
     def data(self, direction: Direction, data: bytes, ts: float) -> None:
         self.offsets[direction] += len(data)
@@ -116,6 +120,7 @@ class _Builder:
             turns=[Turn(d, ts, bytes(b)) for d, ts, b in self.turns],
             gaps=self.gaps,
             anomalies=self.anomalies,
+            transactions=self.transactions,
         )
 
 
@@ -125,15 +130,18 @@ def conversations(
     server: ServerHint = None,
     idle_timeout: float | None = 3600.0,
     max_bytes: int | None = 64 * 1024 * 1024,
+    http: htp.Config | None = None,
 ) -> Iterator[Conversation]:
     """Yields one ``Conversation`` per connection, once it closes.
 
     ``max_bytes`` caps the bytes kept per conversation (both directions
     together); ``None`` means no cap. Other options are those of
-    ``reassemble()``. For UDP, each datagram is its own turn.
+    ``reassemble()``. For UDP, each datagram is its own turn. With ``http``,
+    ``transactions`` holds the libhtp transactions; ``turns`` then only holds
+    bytes libhtp did not parse.
     """
     building: dict[int, _Builder] = {}
-    for ev in _events(source, server, idle_timeout, overlaps=True):
+    for ev in _events(source, server, idle_timeout, http, overlaps=True):
         if isinstance(ev, Data):
             building[ev.flow.id].data(ev.direction, ev.data, ev.ts)
         elif isinstance(ev, Opened):
@@ -142,6 +150,8 @@ def conversations(
             building[ev.flow.id].gap(ev.direction, ev.length)
         elif isinstance(ev, Closed):
             yield building.pop(ev.flow.id).build(ev)
+        elif isinstance(ev, htp.Tx):
+            building[ev.flow.id].transactions.append(ev)
         else:
             _, flow, ts, direction = ev
             building[flow.id].anomalies.append(Anomaly("overlap", direction, ts))

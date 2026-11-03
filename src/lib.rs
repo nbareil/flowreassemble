@@ -8,11 +8,14 @@
 //! - `("gap", flow_id, ts, direction, length)`
 //! - `("overlap", flow_id, ts, direction)`
 //! - `("closed", flow_id, ts, "FIN" | "RST" | "TIMEOUT" | "EOF")`
+//! - `("tx", flow_id, ts, fields)`: HTTP mode only. `fields` is a dict named
+//!   after libhtp's `htp_tx_t` fields (see `http.rs`).
 //!
 //! `direction` is 0 (to the server) or 1 (to the client).
 
 mod decode;
 mod flows;
+mod http;
 mod pcap_handle;
 mod segments;
 
@@ -22,7 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyDict};
 
 use decode::Decoder;
 use flows::{CloseReason, Event, Proto};
@@ -39,6 +42,7 @@ struct Reassembler {
     flows: flows::Reassembler,
     finished: bool,
     handle: Option<Py<Handle>>,
+    http: Option<http::Http>,
 }
 
 fn endpoint(ep: (IpAddr, u16)) -> (String, u16) {
@@ -95,10 +99,68 @@ fn to_py(py: Python<'_>, events: Vec<Event>) -> PyResult<Vec<Py<PyAny>>> {
                     };
                     ("closed", flow, ts, reason).into_pyobject(py)?.into_any()
                 }
+                Event::Tx { flow, ts, tx } => ("tx", flow, ts, tx_dict(py, &tx)?)
+                    .into_pyobject(py)?
+                    .into_any(),
             };
             Ok(obj.unbind())
         })
         .collect()
+}
+
+fn opt_bytes<'py>(py: Python<'py>, b: &Option<Vec<u8>>) -> Option<Bound<'py, PyBytes>> {
+    b.as_ref().map(|b| PyBytes::new(py, b))
+}
+
+fn pairs<'py>(py: Python<'py>, p: &http::Pairs) -> Vec<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
+    p.iter()
+        .map(|(k, v)| (PyBytes::new(py, k), PyBytes::new(py, v)))
+        .collect()
+}
+
+fn uri_dict<'py>(
+    py: Python<'py>,
+    u: &Option<http::UriCopy>,
+) -> PyResult<Option<Bound<'py, PyDict>>> {
+    let Some(u) = u else { return Ok(None) };
+    let d = PyDict::new(py);
+    for (name, value) in http::URI_BYTES.iter().zip(&u.bytes) {
+        d.set_item(name, opt_bytes(py, value))?;
+    }
+    d.set_item("port_number", u.port_number)?;
+    Ok(Some(d))
+}
+
+fn tx_dict<'py>(py: Python<'py>, tx: &http::TxCopy) -> PyResult<Bound<'py, PyDict>> {
+    let d = PyDict::new(py);
+    for (name, value) in http::TX_BYTES.iter().zip(&tx.bytes) {
+        d.set_item(name, opt_bytes(py, value))?;
+    }
+    for (name, value) in http::TX_INTS.iter().zip(&tx.ints) {
+        d.set_item(name, value)?;
+    }
+    d.set_item("parsed_uri", uri_dict(py, &tx.parsed_uri)?)?;
+    d.set_item("parsed_uri_raw", uri_dict(py, &tx.parsed_uri_raw)?)?;
+    d.set_item("request_headers", pairs(py, &tx.request_headers))?;
+    d.set_item("response_headers", pairs(py, &tx.response_headers))?;
+    d.set_item("request_cookies", pairs(py, &tx.request_cookies))?;
+    d.set_item("request_body", opt_bytes(py, &tx.request_body))?;
+    d.set_item("response_body", opt_bytes(py, &tx.response_body))?;
+    Ok(d)
+}
+
+fn http_settings(d: &Bound<'_, PyDict>) -> PyResult<http::Settings> {
+    let get = |k: &str| -> PyResult<Bound<'_, PyAny>> {
+        d.get_item(k)?
+            .ok_or_else(|| PyValueError::new_err(format!("missing http setting: {k}")))
+    };
+    Ok(http::Settings {
+        server_personality: get("server_personality")?.extract()?,
+        request_decompression: get("request_decompression")?.extract()?,
+        response_decompression: get("response_decompression")?.extract()?,
+        parse_request_cookies: get("parse_request_cookies")?.extract()?,
+        keep_bodies: get("keep_bodies")?.extract()?,
+    })
 }
 
 fn wall_clock() -> f64 {
@@ -111,8 +173,12 @@ fn wall_clock() -> f64 {
 #[pymethods]
 impl Reassembler {
     #[new]
-    #[pyo3(signature = (server, idle_timeout))]
-    fn new(server: Option<(String, Option<u16>)>, idle_timeout: Option<f64>) -> PyResult<Self> {
+    #[pyo3(signature = (server, idle_timeout, http = None))]
+    fn new(
+        server: Option<(String, Option<u16>)>,
+        idle_timeout: Option<f64>,
+        http: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Self> {
         let server = server
             .map(|(ip, port)| {
                 ip.parse::<IpAddr>()
@@ -126,6 +192,10 @@ impl Reassembler {
             flows: flows::Reassembler::new(server, idle_timeout),
             finished: false,
             handle: None,
+            http: http
+                .map(http_settings)
+                .transpose()?
+                .map(|s| http::Http::new(&s)),
         })
     }
 
@@ -143,7 +213,7 @@ impl Reassembler {
         } else {
             self.flows.advance(ts, &mut out);
         }
-        to_py(py, out)
+        self.emit(py, out)
     }
 
     /// End of input: closes every open flow.
@@ -153,7 +223,7 @@ impl Reassembler {
             self.finished = true;
             self.flows.finish(&mut out);
         }
-        to_py(py, out)
+        self.emit(py, out)
     }
 
     /// Reads packets from a pcap handle until some events are ready.
@@ -228,11 +298,19 @@ impl Reassembler {
         } else {
             py.check_signals()?;
         }
-        to_py(py, out).map(Some)
+        self.emit(py, out).map(Some)
     }
 }
 
 impl Reassembler {
+    fn emit(&mut self, py: Python<'_>, out: Vec<Event>) -> PyResult<Vec<Py<PyAny>>> {
+        let out = match &mut self.http {
+            Some(h) => h.process(out),
+            None => out,
+        };
+        to_py(py, out)
+    }
+
     fn release(&mut self) {
         if let Some(h) = self.handle.take() {
             let _ = h

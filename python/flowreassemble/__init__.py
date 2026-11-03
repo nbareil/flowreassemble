@@ -1,6 +1,6 @@
 """IP defragmentation and TCP/UDP flow reassembly, for decoding application protocols."""
 
-from . import pcap
+from . import htp, pcap
 from ._conversations import Anomaly, Conversation, Turn, conversations
 from ._reassemble import (
     Closed,
@@ -27,6 +27,7 @@ __all__ = [
     "Opened",
     "Turn",
     "conversations",
+    "htp",
     "pcap",
     "reassemble",
 ]

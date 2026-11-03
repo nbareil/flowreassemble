@@ -8,7 +8,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import _native, pcap
+from . import _native, htp, pcap
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 Endpoint = tuple[IPAddress, int]
@@ -95,7 +95,7 @@ class Closed:
     ts: float
 
 
-Event = Opened | Data | Gap | Closed
+Event = Opened | Data | Gap | Closed | htp.Tx
 
 
 def _server_hint(server: ServerHint) -> tuple[str, int | None] | None:
@@ -107,8 +107,11 @@ def _server_hint(server: ServerHint) -> tuple[str, int | None] | None:
     return str(ipaddress.ip_address(server)), None
 
 
-def _raw_events(source: Source, server: ServerHint, idle_timeout: float | None) -> Iterator[tuple]:
-    core = _native.Reassembler(_server_hint(server), idle_timeout)
+def _raw_events(
+    source: Source, server: ServerHint, idle_timeout: float | None, http: htp.Config | None
+) -> Iterator[tuple]:
+    settings = None if http is None else http._native()
+    core = _native.Reassembler(_server_hint(server), idle_timeout, settings)
     if isinstance(source, pcap.Handle):
         while (batch := core.run(source)) is not None:
             yield from batch
@@ -119,10 +122,14 @@ def _raw_events(source: Source, server: ServerHint, idle_timeout: float | None) 
 
 
 def _events(
-    source: Source, server: ServerHint, idle_timeout: float | None, overlaps: bool
+    source: Source,
+    server: ServerHint,
+    idle_timeout: float | None,
+    http: htp.Config | None,
+    overlaps: bool,
 ) -> Iterator[Event | tuple[str, Flow, float, Direction]]:
     flows: dict[int, Flow] = {}
-    for ev in _raw_events(source, server, idle_timeout):
+    for ev in _raw_events(source, server, idle_timeout, http):
         kind = ev[0]
         if kind == "data":
             _, fid, ts, d, data = ev
@@ -139,6 +146,9 @@ def _events(
         elif kind == "closed":
             _, fid, ts, reason = ev
             yield Closed(flows.pop(fid), CloseReason(reason), ts)
+        elif kind == "tx":
+            _, fid, ts, fields = ev
+            yield htp._tx(flows[fid], ts, fields)
         elif kind == "overlap" and overlaps:
             _, fid, ts, d = ev
             yield ("overlap", flows[fid], ts, _DIRECTIONS[d])
@@ -149,11 +159,14 @@ def reassemble(
     *,
     server: ServerHint = None,
     idle_timeout: float | None = 3600.0,
+    http: htp.Config | None = None,
 ) -> Iterator[Event]:
     """Reassembles flows from a pcap handle or from ``(ts, linktype, frame)`` tuples.
 
     ``server`` names the server (an address, or an ``(address, port)`` pair) when
     direction can't be told from the TCP handshake. ``idle_timeout`` is in
     seconds; ``None`` means flows end only on FIN, RST, or end of input.
+    ``http`` parses every TCP connection with libhtp: transactions are yielded
+    as ``htp.Tx`` instead of ``Data`` events (see ``flowreassemble.htp``).
     """
-    yield from _events(source, server, idle_timeout, overlaps=False)  # type: ignore[misc]
+    yield from _events(source, server, idle_timeout, http, overlaps=False)  # type: ignore[misc]

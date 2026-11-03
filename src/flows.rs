@@ -68,6 +68,12 @@ pub enum Event {
         ts: f64,
         reason: CloseReason,
     },
+    /// An HTTP transaction (HTTP mode only, produced by `http.rs`).
+    Tx {
+        flow: u64,
+        ts: f64,
+        tx: Box<crate::http::TxCopy>,
+    },
 }
 
 /// The server, as given by the user: an address, optionally with a port.

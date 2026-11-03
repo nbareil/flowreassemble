@@ -20,4 +20,16 @@ for conv in conversations(pcap.open_offline("c2.pcap")):
         print(turn.direction, turn.data[:64])
 ```
 
+HTTP is parsed by libhtp, exposed with its own model and names:
+
+```python
+from flowreassemble import reassemble, htp, pcap
+
+for ev in reassemble(pcap.open_offline("c2.pcap"), http=htp.Config(keep_bodies=10_000_000)):
+    match ev:
+        case htp.Tx() as tx if tx.parsed_uri.path == b"/my/c2/dispatcher/":
+            if b"magic" in tx.request_cookies:
+                print(tx.request_body, tx.response_status_number, tx.response_body)
+```
+
 Status: early development.

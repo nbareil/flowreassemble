@@ -11,5 +11,9 @@ name = "_native"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+libc = "0.2.191"
 pcap = "2.5.0"
 pyo3 = { version = "0.30.1", features = ["abi3-py310"] }
+
+[build-dependencies]
+cc = "1.11.0"
