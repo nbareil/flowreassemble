@@ -201,7 +201,11 @@ impl Half {
             (off as u64, payload)
         };
         if fin && self.fin_off.is_none() {
-            self.fin_off = Some(off + payload.len() as u64);
+            let fin_off = off + payload.len() as u64;
+            self.fin_off = Some(fin_off);
+            // An ACK seen earlier may cover the FIN's own sequence number,
+            // which is not stream data.
+            self.max_ack_off = self.max_ack_off.min(fin_off);
         }
         if !payload.is_empty() {
             let end = off + payload.len() as u64;

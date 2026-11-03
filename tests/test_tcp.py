@@ -205,3 +205,18 @@ def test_gap_before_a_fin_is_reported_at_end_of_input():
     frames = c.handshake() + [c.client_frame(c.cseq + 10, FIN | ACK)]
     gaps = [e.length for e in reassemble(frames) if isinstance(e, Gap)]
     assert gaps == [10]
+
+
+def test_ack_covering_the_fin_seen_before_the_fin_adds_no_gap():
+    c = Conn()
+    frames = c.handshake()
+    base = c.cseq
+    frames += [
+        c.send(b"0123456789"),
+        c.ack_from_server(base + 11),  # acknowledges the FIN, not yet captured
+        c.client_frame(base + 10, FIN | ACK),
+        c.server_frame(c.sseq, FIN | ACK, ack=base + 11),
+    ]
+    events = list(reassemble(frames))
+    assert not any(isinstance(e, Gap) for e in events)
+    assert events[-1].reason is CloseReason.FIN
