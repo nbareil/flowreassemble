@@ -1,0 +1,15 @@
+[package]
+name = "flowreassemble"
+version = "0.1.0"
+edition = "2024"
+license = "BSD-3-Clause"
+description = "IP defragmentation and TCP/UDP flow reassembly for Python"
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pcap = "2.5.0"
+pyo3 = { version = "0.30.1", features = ["abi3-py310"] }

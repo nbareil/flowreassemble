@@ -1,0 +1,9 @@
+/target/
+/.venv/
+/.direnv/
+__pycache__/
+*.so
+*.pyd
+*.pcap
+*.pcapng
+!tests/data/*.pcap
