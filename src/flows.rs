@@ -248,8 +248,11 @@ impl Half {
             ack_off = ack_off.min(fin);
         }
         self.max_ack_off = self.max_ack_off.max(ack_off);
-        // Only skip a hole when buffered data proves the stream went on past it.
-        if self.pending.first_start().is_some_and(|s| s < ack_off) {
+        // Only skip a hole when the stream provably went on past it: buffered
+        // data after it, or an acknowledged FIN (the FIN marks the stream end).
+        let past_hole = self.pending.first_start().is_some_and(|s| s < ack_off)
+            || self.fin_off.is_some_and(|fin| ack_off >= fin);
+        if past_hole {
             self.skip_to(ack_off, at, out);
         }
     }
@@ -260,6 +263,7 @@ impl Half {
             .end()
             .unwrap_or(0)
             .max(self.max_ack_off)
+            .max(self.fin_off.unwrap_or(0))
             .max(self.next_off);
         self.skip_to(target, at, out);
     }

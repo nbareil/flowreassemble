@@ -134,6 +134,14 @@ class Conn:
             self.sseq += len(payload)
         return f
 
+    def client_frame(self, seq: int, flags: int, payload: bytes = b"", ack: int | None = None):
+        """A raw client -> server segment; ``seq`` is absolute."""
+        return self._frame(self.c, self.s, seq, self.sseq if ack is None else ack, flags, payload)
+
+    def server_frame(self, seq: int, flags: int, payload: bytes = b"", ack: int | None = None):
+        """A raw server -> client segment; ``seq`` is absolute."""
+        return self._frame(self.s, self.c, seq, self.cseq if ack is None else ack, flags, payload)
+
     def ack_from_server(self, ack: int):
         return self._frame(self.s, self.c, self.sseq, ack, ACK, b"")
 

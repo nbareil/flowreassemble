@@ -1,7 +1,7 @@
 import ipaddress
 
 from flowreassemble import Closed, CloseReason, Data, Direction, Gap, Opened, reassemble
-from packets import ACK, ETHERNET, SYN, Conn, ether, ipv4, nested_ipv6_fragments, tcp
+from packets import ACK, ETHERNET, FIN, SYN, Conn, ether, ipv4, nested_ipv6_fragments, tcp
 
 
 def stream(events, direction):
@@ -184,3 +184,24 @@ def test_ip_fragment_nesting_is_limited():
     assert not any(isinstance(e, Opened) for e in reassemble(nested_ipv6_fragments(20, syn)))
     # Deep nesting used to recurse without bound and overflow the stack.
     assert not any(isinstance(e, Opened) for e in reassemble(nested_ipv6_fragments(30_000, syn)))
+
+
+def test_acked_fin_after_lost_data_reports_the_gap_and_closes_with_fin():
+    c = Conn()
+    frames = c.handshake()
+    base = c.cseq
+    frames.append(c.client_frame(base + 10, FIN | ACK))  # the 10 bytes before it were lost
+    frames.append(c.server_frame(c.sseq, FIN | ACK, ack=base + 11))
+    events = list(reassemble(frames))
+    assert [(type(e).__name__, getattr(e, "length", None)) for e in events[1:]] == [
+        ("Gap", 10),
+        ("Closed", None),
+    ]
+    assert events[-1].reason is CloseReason.FIN
+
+
+def test_gap_before_a_fin_is_reported_at_end_of_input():
+    c = Conn()
+    frames = c.handshake() + [c.client_frame(c.cseq + 10, FIN | ACK)]
+    gaps = [e.length for e in reassemble(frames) if isinstance(e, Gap)]
+    assert gaps == [10]
